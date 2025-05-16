@@ -1,146 +1,151 @@
 // Views/DocumentManagement.jsx
 import { useState, useEffect } from "react";
-import { useSelector, useDispatch } from "react-redux";
 import { useNavigate, Link } from "react-router-dom";
-import {
-  setFilters,
-  clearFilters,
-  setCurrentDocument,
-  deleteDocument,
-} from "../store/documentSlice";
+import axios from "axios";
 
 export default function DocumentManagement() {
-  const dispatch = useDispatch();
   const navigate = useNavigate();
-  const { user, isAuthenticated } = useSelector((state) => state.auth);
-  const { documents, filters } = useSelector((state) => state.documents);
 
-  // Local state for search and pagination
-  const [searchTerm, setSearchTerm] = useState(filters.searchTerm || "");
-  const [selectedStatus, setSelectedStatus] = useState(filters.status || "all");
-  const [selectedTag, setSelectedTag] = useState(filters.tags[0] || "all");
-  const [sortField, setSortField] = useState("updatedAt");
-  const [sortDirection, setSortDirection] = useState("desc");
+  // State
+  const [user, setUser] = useState(null);
+  const [documents, setDocuments] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [itemsPerPage, setItemsPerPage] = useState(10);
 
-  useEffect(() => {
-    // Redirect to login if not authenticated
-    if (!isAuthenticated) {
-      navigate("/login");
-    }
-  }, [isAuthenticated, navigate]);
-
-  // Apply filters when local state changes
-  useEffect(() => {
-    dispatch(
-      setFilters({
-        searchTerm,
-        status: selectedStatus === "all" ? null : selectedStatus,
-        tags: selectedTag === "all" ? [] : [selectedTag],
-      })
-    );
-  }, [searchTerm, selectedStatus, selectedTag, dispatch]);
-
-  // Get all unique tags from documents
-  const allTags = [...new Set(documents.flatMap((doc) => doc.tags || []))];
-
-  // Filter documents based on filters
-  const filteredDocuments = documents.filter((doc) => {
-    // Search term filter
-    const matchesSearch =
-      !filters.searchTerm ||
-      doc.title.toLowerCase().includes(filters.searchTerm.toLowerCase()) ||
-      doc.description.toLowerCase().includes(filters.searchTerm.toLowerCase());
-
-    // Status filter
-    const matchesStatus = !filters.status || doc.status === filters.status;
-
-    // Tags filter
-    const matchesTags =
-      filters.tags.length === 0 ||
-      filters.tags.some((tag) => doc.tags && doc.tags.includes(tag));
-
-    // Filter documents for regular users to see only their own documents
-    const matchesUser = user.role === "admin" || doc.createdBy === user.id;
-
-    return matchesSearch && matchesStatus && matchesTags && matchesUser;
-  });
-
-  // Sort filtered documents
-  const sortedDocuments = [...filteredDocuments].sort((a, b) => {
-    let aValue = a[sortField];
-    let bValue = b[sortField];
-
-    // Handle date fields
-    if (sortField === "createdAt" || sortField === "updatedAt") {
-      aValue = new Date(aValue);
-      bValue = new Date(bValue);
-    } else if (typeof aValue === "string") {
-      aValue = aValue.toLowerCase();
-      bValue = bValue.toLowerCase();
-    }
-
-    if (aValue < bValue) return sortDirection === "asc" ? -1 : 1;
-    if (aValue > bValue) return sortDirection === "asc" ? 1 : -1;
-    return 0;
-  });
-
-  // Paginate documents
-  const indexOfLastItem = currentPage * itemsPerPage;
-  const indexOfFirstItem = indexOfLastItem - itemsPerPage;
-  const currentDocuments = sortedDocuments.slice(
-    indexOfFirstItem,
-    indexOfLastItem
-  );
-  const totalPages = Math.ceil(sortedDocuments.length / itemsPerPage);
-
-  // Handle sort
-  const handleSort = (field) => {
-    if (sortField === field) {
-      setSortDirection(sortDirection === "asc" ? "desc" : "asc");
-    } else {
-      setSortField(field);
-      setSortDirection("desc");
+  // Get authenticated user info from localStorage
+  const getTokenAndUser = () => {
+    try {
+      const serializedUser = localStorage.getItem("user");
+      
+      if (serializedUser === null) {
+        return { token: null, userId: null, roles: [] };
+      }
+      const user = JSON.parse(serializedUser);
+      return { token: user.token, userId: user.id, roles: user.roles || [] };
+    } catch (error) {
+      console.error("Could not load token from storage:", error);
+      return { token: null, userId: null, roles: [] };
     }
   };
 
-  // Handle view document
+  useEffect(() => {
+    const fetchDocumentsForUser = async () => {
+      setLoading(true);
+      setError(null);
+      
+      try {
+        const { token, userId } = getTokenAndUser();
+        if (!token || !userId) {
+          navigate('/login');
+          return;
+        }
+
+        // Step 1: Fetch user info
+        const userResponse = await axios.get(`http://localhost:8080/api/users/${userId}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        
+        if (!userResponse.data) {
+          throw new Error("Could not fetch user data");
+        }
+        
+        const userData = userResponse.data;
+        setUser(userData);
+
+        // Step 2: Extract user's department IDs
+        const userDepartmentIds = userData.departments?.map(dep => dep.id) || [];
+
+        // Step 3: Fetch all documents
+        const documentsResponse = await axios.get("http://localhost:8083/api/documents", {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+
+        if (!documentsResponse.data) {
+          throw new Error("Could not fetch documents");
+        }
+
+        // Step 4: Filter documents based on user's departments
+        const userDocuments = documentsResponse.data.filter(doc =>
+          !doc.departmentId || userDepartmentIds.includes(doc.departmentId)
+        );
+
+        setDocuments(userDocuments);
+      } catch (err) {
+        console.error("Error fetching documents or user data:", err);
+        setError(err.response?.data?.message || err.message || "An error occurred while fetching data");
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchDocumentsForUser();
+  }, [navigate]);
+
+  // Pagination calculation
+  const indexOfLastItem = currentPage * itemsPerPage;
+  const indexOfFirstItem = indexOfLastItem - itemsPerPage;
+  const currentDocuments = documents.slice(indexOfFirstItem, indexOfLastItem);
+  const totalPages = Math.ceil(documents.length / itemsPerPage);
+
   const handleViewDocument = (documentId) => {
-    dispatch(setCurrentDocument(documentId));
     navigate(`/documents/view/${documentId}`);
   };
 
-  // Handle edit document
   const handleEditDocument = (documentId) => {
-    dispatch(setCurrentDocument(documentId));
     navigate(`/documents/edit/${documentId}`);
   };
 
-  // Handle delete document
-  const handleDeleteDocument = (documentId) => {
-    if (window.confirm("Are you sure you want to delete this document?")) {
-      dispatch(deleteDocument(documentId));
+  const handleDeleteDocument = async (documentId) => {
+    if (!window.confirm("Are you sure you want to delete this document?")) return;
+    
+    setLoading(true);
+    try {
+      const { token } = getTokenAndUser();
+      if (!token) {
+        navigate('/login');
+        return;
+      }
+      
+      await axios.delete(`http://localhost:8083/api/documents/${documentId}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      
+      setDocuments((docs) => docs.filter((doc) => doc.id !== documentId));
+    } catch (err) {
+      console.error("Failed to delete document", err);
+      setError(err.response?.data?.message || err.message || "Failed to delete document");
+    } finally {
+      setLoading(false);
     }
   };
 
-  // Reset filters
-  const handleResetFilters = () => {
-    setSearchTerm("");
-    setSelectedStatus("all");
-    setSelectedTag("all");
-    dispatch(clearFilters());
-  };
+  // Check if user is authenticated
+  if (!user && !loading) {
+    navigate('/login');
+    return null;
+  }
 
-  if (!isAuthenticated) return null;
+  // Get status display class
+  const getStatusClass = (status) => {
+    switch(status) {
+      case "published":
+        return "bg-green-100 text-green-800";
+      case "approved":
+        return "bg-blue-100 text-blue-800";
+      case "draft":
+        return "bg-yellow-100 text-yellow-800";
+      default:
+        return "bg-gray-100 text-gray-800";
+    }
+  };
 
   return (
     <div className="p-6 bg-gray-50 min-h-screen">
       <div className="max-w-6xl mx-auto">
         <div className="flex justify-between items-center mb-8">
-          <h1 className="text-3xl font-bold text-primary">
-            Document Management
-          </h1>
+          <h1 className="text-3xl font-bold text-primary">Document Management</h1>
           <Link
             to="/documents/new"
             className="px-4 py-2 bg-primary text-white rounded-lg hover:bg-secondary transition"
@@ -149,209 +154,136 @@ export default function DocumentManagement() {
           </Link>
         </div>
 
-        {/* Filter Controls */}
-        <div className="bg-white rounded-lg shadow-md p-6 mb-8">
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-4">
-            {/* Search */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Search
-              </label>
-              <input
-                type="text"
-                placeholder="Search documents..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="w-full p-2 border rounded-lg"
-              />
-            </div>
-
-            {/* Status Filter */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Status
-              </label>
-              <select
-                value={selectedStatus}
-                onChange={(e) => setSelectedStatus(e.target.value)}
-                className="w-full p-2 border rounded-lg"
-              >
-                <option value="all">All Statuses</option>
-                <option value="draft">Draft</option>
-                <option value="published">Published</option>
-                <option value="approved">Approved</option>
-              </select>
-            </div>
-
-            {/* Tag Filter */}
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Tag
-              </label>
-              <select
-                value={selectedTag}
-                onChange={(e) => setSelectedTag(e.target.value)}
-                className="w-full p-2 border rounded-lg"
-              >
-                <option value="all">All Tags</option>
-                {allTags.map((tag) => (
-                  <option key={tag} value={tag}>
-                    {tag}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            {/* Reset Filters */}
-            <div className="flex items-end">
-              <button
-                onClick={handleResetFilters}
-                className="px-4 py-2 border text-gray-600 rounded-lg hover:bg-gray-100 transition"
-              >
-                Reset Filters
-              </button>
+        {error && (
+          <div className="bg-red-50 border-l-4 border-red-500 p-4 mb-8">
+            <div className="flex">
+              <div className="flex-shrink-0">
+                <svg className="h-5 w-5 text-red-400" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM8.707 7.293a1 1 0 00-1.414 1.414L8.586 10l-1.293 1.293a1 1 0 101.414 1.414L10 11.414l1.293 1.293a1 1 0 001.414-1.414L11.414 10l1.293-1.293a1 1 0 00-1.414-1.414L10 8.586 8.707 7.293z" clipRule="evenodd" />
+                </svg>
+              </div>
+              <div className="ml-3">
+                <p className="text-sm text-red-700">{error}</p>
+              </div>
+              <div className="ml-auto pl-3">
+                <div className="-mx-1.5 -my-1.5">
+                  <button
+                    onClick={() => setError(null)}
+                    className="inline-flex rounded-md p-1.5 text-red-500 hover:bg-red-100 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-red-500"
+                  >
+                    <span className="sr-only">Dismiss</span>
+                    <svg className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                      <path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
             </div>
           </div>
-        </div>
+        )}
 
         {/* Documents Table */}
         <div className="bg-white rounded-lg shadow-md p-6">
-          <div className="overflow-x-auto">
-            <table className="min-w-full divide-y divide-gray-200">
-              <thead className="bg-gray-50">
-                <tr>
-                  <th
-                    className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer"
-                    onClick={() => handleSort("title")}
-                  >
-                    <div className="flex items-center">
+          {loading ? (
+            <div className="py-8 text-center">
+              <p className="text-gray-500">Loading documents...</p>
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="min-w-full divide-y divide-gray-200">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Title
-                      {sortField === "title" && (
-                        <span className="ml-1">
-                          {sortDirection === "asc" ? "▲" : "▼"}
-                        </span>
-                      )}
-                    </div>
-                  </th>
-                  <th
-                    className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hidden md:table-cell"
-                    onClick={() => handleSort("status")}
-                  >
-                    <div className="flex items-center">
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider hidden md:table-cell">
                       Status
-                      {sortField === "status" && (
-                        <span className="ml-1">
-                          {sortDirection === "asc" ? "▲" : "▼"}
-                        </span>
-                      )}
-                    </div>
-                  </th>
-                  <th
-                    className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider cursor-pointer hidden lg:table-cell"
-                    onClick={() => handleSort("updatedAt")}
-                  >
-                    <div className="flex items-center">
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider hidden lg:table-cell">
                       Last Updated
-                      {sortField === "updatedAt" && (
-                        <span className="ml-1">
-                          {sortDirection === "asc" ? "▲" : "▼"}
-                        </span>
-                      )}
-                    </div>
-                  </th>
-                  <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
-                    Actions
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="bg-white divide-y divide-gray-200">
-                {currentDocuments.length > 0 ? (
-                  currentDocuments.map((doc) => (
-                    <tr key={doc.id} className="hover:bg-gray-50">
-                      <td className="px-6 py-4">
-                        <div className="flex flex-col">
-                          <div
-                            className="text-sm font-medium text-blue-600 hover:text-blue-800 cursor-pointer"
-                            onClick={() => handleViewDocument(doc.id)}
-                          >
-                            {doc.title}
-                          </div>
-                          <div className="text-xs text-gray-500 mt-1 hidden md:block">
-                            {doc.description.length > 60
-                              ? `${doc.description.slice(0, 60)}...`
-                              : doc.description}
-                          </div>
-                          <div className="flex flex-wrap mt-1 gap-1 md:hidden">
-                            <span
-                              className={`px-2 py-0.5 text-xs rounded-full ${
-                                doc.status === "published"
-                                  ? "bg-green-100 text-green-800"
-                                  : doc.status === "approved"
-                                  ? "bg-blue-100 text-blue-800"
-                                  : "bg-yellow-100 text-yellow-800"
-                              }`}
+                    </th>
+                    <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      Actions
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="bg-white divide-y divide-gray-200">
+                  {currentDocuments.length > 0 ? (
+                    currentDocuments.map((doc) => (
+                      <tr key={doc.id} className="hover:bg-gray-50">
+                        <td className="px-6 py-4">
+                          <div className="flex flex-col">
+                            <div
+                              className="text-sm font-medium text-blue-600 hover:text-blue-800 cursor-pointer"
+                              onClick={() => handleViewDocument(doc.id)}
                             >
-                              {doc.status}
-                            </span>
+                              {doc.title || "Untitled Document"}
+                            </div>
+                            <div className="text-xs text-gray-500 mt-1 hidden md:block">
+                              {doc.description && doc.description.length > 60
+                                ? `${doc.description.slice(0, 60)}...`
+                                : doc.description || "No description"}
+                            </div>
+                            <div className="flex flex-wrap mt-1 gap-1 md:hidden">
+                              <span
+                                className={`px-2 py-0.5 text-xs rounded-full ${getStatusClass(doc.status)}`}
+                              >
+                                {doc.status || "draft"}
+                              </span>
+                            </div>
                           </div>
-                        </div>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap hidden md:table-cell">
-                        <span
-                          className={`px-2 py-1 text-xs rounded-full ${
-                            doc.status === "published"
-                              ? "bg-green-100 text-green-800"
-                              : doc.status === "approved"
-                              ? "bg-blue-100 text-blue-800"
-                              : "bg-yellow-100 text-yellow-800"
-                          }`}
-                        >
-                          {doc.status}
-                        </span>
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 hidden lg:table-cell">
-                        {new Date(doc.updatedAt).toLocaleDateString()}
-                      </td>
-                      <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                        <button
-                          onClick={() => handleViewDocument(doc.id)}
-                          className="text-blue-600 hover:text-blue-900 mr-3"
-                        >
-                          View
-                        </button>
-                        <button
-                          onClick={() => handleEditDocument(doc.id)}
-                          className="text-indigo-600 hover:text-indigo-900 mr-3"
-                        >
-                          Edit
-                        </button>
-                        <button
-                          onClick={() => handleDeleteDocument(doc.id)}
-                          className="text-red-600 hover:text-red-900"
-                        >
-                          Delete
-                        </button>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap hidden md:table-cell">
+                          <span
+                            className={`px-2 py-1 text-xs rounded-full ${getStatusClass(doc.status)}`}
+                          >
+                            {doc.status || "draft"}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 hidden lg:table-cell">
+                          {doc.updatedAt ? new Date(doc.updatedAt).toLocaleDateString() : "N/A"}
+                        </td>
+                        <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                          <button
+                            onClick={() => handleViewDocument(doc.id)}
+                            className="text-blue-600 hover:text-blue-900 mr-3"
+                          >
+                            View
+                          </button>
+                          <button
+                            onClick={() => handleEditDocument(doc.id)}
+                            className="text-indigo-600 hover:text-indigo-900 mr-3"
+                          >
+                            Edit
+                          </button>
+                          <button
+                            onClick={() => handleDeleteDocument(doc.id)}
+                            className="text-red-600 hover:text-red-900"
+                          >
+                            Delete
+                          </button>
+                        </td>
+                      </tr>
+                    ))
+                  ) : (
+                    <tr>
+                      <td
+                        colSpan="4"
+                        className="px-6 py-4 text-center text-gray-500"
+                      >
+                        No documents found
                       </td>
                     </tr>
-                  ))
-                ) : (
-                  <tr>
-                    <td
-                      colSpan="4"
-                      className="px-6 py-4 text-center text-gray-500"
-                    >
-                      No documents found matching your criteria
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-            </table>
-          </div>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          )}
 
           {/* Pagination */}
-          {sortedDocuments.length > 0 && (
-            <div className="flex justify-between items-center mt-4">
-              <div className="flex items-center">
+          {!loading && documents.length > 0 && (
+            <div className="flex flex-col md:flex-row justify-between items-center mt-4">
+              <div className="flex items-center mb-4 md:mb-0">
                 <select
                   value={itemsPerPage}
                   onChange={(e) => {
@@ -366,8 +298,8 @@ export default function DocumentManagement() {
                 </select>
                 <span className="text-sm text-gray-500">
                   Showing {indexOfFirstItem + 1} to{" "}
-                  {Math.min(indexOfLastItem, sortedDocuments.length)} of{" "}
-                  {sortedDocuments.length} documents
+                  {Math.min(indexOfLastItem, documents.length)} of{" "}
+                  {documents.length} documents
                 </span>
               </div>
 
@@ -395,26 +327,26 @@ export default function DocumentManagement() {
                   } else {
                     pageNum = currentPage - 2 + i;
                   }
-                  return pageNum;
-                }).map((page) => (
-                  <button
-                    key={page}
-                    onClick={() => setCurrentPage(page)}
-                    className={`px-3 py-1 mx-1 border rounded ${
-                      currentPage === page
-                        ? "bg-primary text-white"
-                        : "text-gray-700 hover:bg-gray-100"
-                    }`}
-                  >
-                    {page}
-                  </button>
-                ))}
+                  return (
+                    <button
+                      key={pageNum}
+                      onClick={() => setCurrentPage(pageNum)}
+                      className={`px-3 py-1 mx-1 border rounded ${
+                        currentPage === pageNum
+                          ? "bg-primary text-white"
+                          : "text-gray-700 hover:bg-gray-100"
+                      }`}
+                    >
+                      {pageNum}
+                    </button>
+                  );
+                })}
 
                 <button
                   onClick={() => setCurrentPage(currentPage + 1)}
-                  disabled={currentPage === totalPages}
+                  disabled={currentPage === totalPages || totalPages === 0}
                   className={`px-3 py-1 mx-1 border rounded ${
-                    currentPage === totalPages
+                    currentPage === totalPages || totalPages === 0
                       ? "text-gray-400 cursor-not-allowed"
                       : "text-gray-700 hover:bg-gray-100"
                   }`}

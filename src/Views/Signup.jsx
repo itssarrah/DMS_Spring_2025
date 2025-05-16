@@ -1,11 +1,12 @@
-import { useState } from "react";
-import { useDispatch } from "react-redux";
-import { signUp } from "../store/authSlice";
+import { useState, useEffect } from "react";
+import { useDispatch, useSelector } from "react-redux";
+import { signUp, clearError } from "../store/authSlice";
 import { Link, useNavigate } from "react-router-dom";
 
 export default function Signup() {
   const dispatch = useDispatch();
   const navigate = useNavigate();
+  const { isAuthenticated, error, loading } = useSelector((state) => state.auth);
 
   // Form State
   const [formData, setFormData] = useState({
@@ -19,10 +20,33 @@ export default function Signup() {
   const [errors, setErrors] = useState({});
   const [successMessage, setSuccessMessage] = useState("");
 
+  // Redirect if already logged in
+  useEffect(() => {
+    if (isAuthenticated) {
+      navigate("/dashboard");
+    }
+    
+    // Clear any previous errors when component mounts
+    dispatch(clearError());
+  }, [isAuthenticated, navigate, dispatch]);
+
+  // Update local errors when Redux errors change
+  useEffect(() => {
+    if (error) {
+      setErrors({ api: error });
+    }
+  }, [error]);
+
   // Handle Input Change
   const handleChange = (e) => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
     setErrors({ ...errors, [e.target.name]: "" }); // Clear errors on input change
+    
+    // Also clear any API errors
+    if (errors.api) {
+      setErrors({ ...errors, api: "" });
+      dispatch(clearError());
+    }
   };
 
   // Form Validation Logic
@@ -56,13 +80,19 @@ export default function Signup() {
 
     // Dispatch signUp action
     dispatch(signUp(formData))
-      .unwrap()
       .then(() => {
-        setSuccessMessage("Account created successfully! Redirecting...");
+        setSuccessMessage("Account created successfully! Redirecting to login...");
+        // Clear form after successful submission
+        setFormData({
+          firstName: "",
+          lastName: "",
+          email: "",
+          password: "",
+        });
         setTimeout(() => navigate("/login"), 3000);
       })
       .catch((err) => {
-        setErrors({ api: err.message || "Registration failed." });
+        // Error handling is now in the useEffect that watches for Redux errors
       });
   };
 
@@ -152,9 +182,12 @@ export default function Signup() {
           {/* Submit Button */}
           <button
             type="submit"
-            className="w-full py-3 bg-primary text-white rounded-lg shadow-md hover:bg-secondary transition"
+            className={`w-full py-3 bg-primary text-white rounded-lg shadow-md hover:bg-secondary transition ${
+              loading ? "opacity-70 cursor-not-allowed" : ""
+            }`}
+            disabled={loading}
           >
-            Sign Up
+            {loading ? "Creating Account..." : "Sign Up"}
           </button>
         </form>
 

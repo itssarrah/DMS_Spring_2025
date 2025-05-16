@@ -1,4 +1,3 @@
-// Views/Login.jsx
 import { useState, useEffect } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useDispatch, useSelector } from "react-redux";
@@ -12,34 +11,54 @@ export default function Login() {
   );
 
   const [formData, setFormData] = useState({
-    email: "",
+    username: "", // Renamed from email
     password: "",
   });
 
+  const [localErrors, setLocalErrors] = useState({});
+
   useEffect(() => {
-    // Redirect if already authenticated
     if (isAuthenticated) {
       navigate("/dashboard");
     }
 
-    // Clear previous errors when component mounts
     dispatch(clearError());
   }, [isAuthenticated, navigate, dispatch]);
 
+  const validateForm = () => {
+    const errors = {};
+    if (!formData.username.trim()) {
+      errors.username = "Username is required";
+    }
+    if (!formData.password) {
+      errors.password = "Password is required";
+    }
+    return errors;
+  };
+
   const handleChange = (e) => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
+
+    if (localErrors[e.target.name]) {
+      setLocalErrors({
+        ...localErrors,
+        [e.target.name]: ""
+      });
+    }
+
     if (error) dispatch(clearError());
   };
 
   const handleSubmit = (e) => {
     e.preventDefault();
 
-    // Validate form
-    if (!formData.email || !formData.password) {
+    const errors = validateForm();
+    if (Object.keys(errors).length > 0) {
+      setLocalErrors(errors);
       return;
     }
 
-    // Attempt login
+    setLocalErrors({});
     dispatch(login(formData));
   };
 
@@ -59,14 +78,18 @@ export default function Login() {
         <form className="space-y-4" onSubmit={handleSubmit}>
           <div>
             <input
-              type="email"
-              name="email"
-              placeholder="Email"
-              value={formData.email}
+              type="text"
+              name="username"
+              placeholder="Username"
+              value={formData.username}
               onChange={handleChange}
-              className="w-full p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
-              required
+              className={`w-full p-3 border rounded-lg focus:outline-none focus:ring-2 ${
+                localErrors.username ? "border-red-500" : "focus:ring-primary"
+              }`}
             />
+            {localErrors.username && (
+              <p className="text-red-500 text-sm mt-1">{localErrors.username}</p>
+            )}
           </div>
 
           <div>
@@ -76,9 +99,13 @@ export default function Login() {
               placeholder="Password"
               value={formData.password}
               onChange={handleChange}
-              className="w-full p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
-              required
+              className={`w-full p-3 border rounded-lg focus:outline-none focus:ring-2 ${
+                localErrors.password ? "border-red-500" : "focus:ring-primary"
+              }`}
             />
+            {localErrors.password && (
+              <p className="text-red-500 text-sm mt-1">{localErrors.password}</p>
+            )}
           </div>
 
           <button

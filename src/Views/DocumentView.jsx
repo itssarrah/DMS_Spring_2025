@@ -2,9 +2,10 @@ import { useState, useEffect } from "react";
 import { useSelector, useDispatch } from "react-redux";
 import { useNavigate, useParams, Link } from "react-router-dom";
 import {
-  setCurrentDocument,
+  fetchDocumentById,
   clearCurrentDocument,
-  deleteDocument,
+  deleteDocumentAsync,
+  downloadDocument,
 } from "../store/documentSlice";
 
 export default function DocumentView() {
@@ -12,9 +13,12 @@ export default function DocumentView() {
   const navigate = useNavigate();
   const { id } = useParams();
   const { user, isAuthenticated } = useSelector((state) => state.auth);
-  const { currentDocument, loading } = useSelector((state) => state.documents);
+  const { currentDocument, loading, error } = useSelector((state) => state.documents);
 
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [downloadLoading, setDownloadLoading] = useState(false);
+  const [translatedTitle, setTranslatedTitle] = useState("");
+  const [translating, setTranslating] = useState(false);
 
   useEffect(() => {
     // Redirect to login if not authenticated
@@ -25,7 +29,7 @@ export default function DocumentView() {
 
     // Load document data
     if (id) {
-      dispatch(setCurrentDocument(Number(id)));
+      dispatch(fetchDocumentById(Number(id)));
     }
 
     // Cleanup
@@ -33,6 +37,17 @@ export default function DocumentView() {
       dispatch(clearCurrentDocument());
     };
   }, [isAuthenticated, id, dispatch, navigate]);
+
+  // Check if user has access to this document based on department
+  const hasAccessToDocument = () => {
+    if (!currentDocument || !user) return false;
+    
+    // Admin can access all documents
+    if (user.roles[0] === "ROLE_ADMIN") return true;
+    console.log(user);
+    // Check if user belongs to the document's department
+    return user.departments.includes(currentDocument.departmentId);
+  };
 
   // Format date for display
   const formatDate = (dateString) => {
@@ -48,7 +63,7 @@ export default function DocumentView() {
   // Handle document deletion
   const handleDelete = () => {
     if (confirmDelete) {
-      dispatch(deleteDocument(currentDocument.id));
+      dispatch(deleteDocumentAsync(currentDocument.id));
       navigate("/documents");
     } else {
       setConfirmDelete(true);
@@ -60,12 +75,92 @@ export default function DocumentView() {
     setConfirmDelete(false);
   };
 
+  // Handle document download
+  const handleDownload = async () => {
+    if (!currentDocument?.fileName) return;
+    
+    setDownloadLoading(true);
+    
+    try {
+      await dispatch(downloadDocument(currentDocument.id)).unwrap();
+      setDownloadLoading(false);
+    } catch (error) {
+      console.error("Error downloading document:", error);
+      alert("Failed to download the document");
+      setDownloadLoading(false);
+    }
+  };
+
+  // Handle title translation
+  const translateTitle = async () => {
+    if (!currentDocument?.title) return;
+    
+    setTranslating(true);
+    
+    try {
+      // Mock API call for translation (would be a real API in production)
+      // Normally would call a translation service like Google Translate API
+      setTimeout(() => {
+        // Simple mock translation - in production this would call a real API
+        const translations = {
+          en: {
+            fr: "Titre traduit",
+            es: "Título traducido",
+            de: "Übersetzter Titel",
+          },
+        };
+        
+        // Get user's preferred language from their profile (mock)
+        const userLanguage = "fr"; // This would come from user preferences
+        
+        // Simulate translation response
+        setTranslatedTitle(
+          translations.en[userLanguage] 
+            ? `${translations.en[userLanguage]} (${currentDocument.title})` 
+            : currentDocument.title
+        );
+        
+        setTranslating(false);
+      }, 1000);
+    } catch (error) {
+      console.error("Error translating title:", error);
+      setTranslating(false);
+    }
+  };
+
+  useEffect(() => {
+    if (currentDocument?.title) {
+      translateTitle();
+    }
+  }, [currentDocument]);
+
   if (!isAuthenticated) return null;
 
   if (loading) {
     return (
       <div className="p-6 bg-gray-50 min-h-screen flex justify-center items-center">
         <p className="text-xl text-gray-600">Loading document...</p>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="p-6 bg-gray-50 min-h-screen">
+        <div className="max-w-4xl mx-auto text-center">
+          <h1 className="text-3xl font-bold text-red-500 mb-4">
+            Error Loading Document
+          </h1>
+          <p className="text-gray-600 mb-6">
+            {error}
+          </p>
+          <Link
+            to="/documents"
+            className="inline-block px-4 py-2 bg-primary text-white rounded-lg hover:bg-secondary transition"
+          >
+            Back to Documents
+          </Link>
+        </div>
       </div>
     );
   }
@@ -91,13 +186,40 @@ export default function DocumentView() {
     );
   }
 
+  // Show access denied if user doesn't have access to this department's document
+  if (!hasAccessToDocument()) {
+    return (
+      <div className="p-6 bg-gray-50 min-h-screen">
+        <div className="max-w-4xl mx-auto text-center">
+          <h1 className="text-3xl font-bold text-red-500 mb-4">
+            Access Denied
+          </h1>
+          <p className="text-gray-600 mb-6">
+            You don't have permission to view this document.
+          </p>
+          <Link
+            to="/documents"
+            className="inline-block px-4 py-2 bg-primary text-white rounded-lg hover:bg-secondary transition"
+          >
+            Back to Documents
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="p-6 bg-gray-50 min-h-screen">
       <div className="max-w-4xl mx-auto">
         <div className="flex justify-between items-center mb-6">
-          <h1 className="text-3xl font-bold text-primary">
-            {currentDocument.title}
-          </h1>
+          <div>
+            <h1 className="text-3xl font-bold text-primary">
+              {translatedTitle || currentDocument.title}
+            </h1>
+            {translating && (
+              <p className="text-sm text-gray-500 mt-1">Translating title...</p>
+            )}
+          </div>
 
           <div className="flex space-x-3">
             <Link
@@ -156,10 +278,20 @@ export default function DocumentView() {
                       : "bg-yellow-100 text-yellow-800"
                   }`}
                 >
-                  {currentDocument.status.charAt(0).toUpperCase() +
-                    currentDocument.status.slice(1)}
+                  draft
                 </span>
               </div>
+            </div>
+
+            <div>
+              <p className="text-sm text-gray-500">Department</p>
+              <p className="mt-1 font-medium">
+                {/* This would normally display the department name from departments array */}
+                {currentDocument.departmentId === 1 ? "IT" : 
+                 currentDocument.departmentId === 2 ? "Finance" : 
+                 currentDocument.departmentId === 3 ? "HR" : 
+                 "Department ID: " + currentDocument.departmentId}
+              </p>
             </div>
 
             <div>
@@ -179,6 +311,26 @@ export default function DocumentView() {
               <p className="text-sm text-gray-500">Last Updated</p>
               <p className="mt-1">{formatDate(currentDocument.updatedAt)}</p>
             </div>
+
+            {currentDocument.fileName && (
+              <div>
+                <p className="text-sm text-gray-500">File</p>
+                <p className="mt-1 flex items-center">
+                  <span className="mr-2">{currentDocument.fileName}</span>
+                  <button
+                    onClick={handleDownload}
+                    disabled={downloadLoading}
+                    className="px-2 py-1 text-xs bg-blue-100 text-blue-700 rounded-lg hover:bg-blue-200 transition inline-flex items-center"
+                  >
+                    {downloadLoading ? (
+                      <span>Downloading...</span>
+                    ) : (
+                      <span>Download</span>
+                    )}
+                  </button>
+                </p>
+              </div>
+            )}
           </div>
 
           {/* Tags */}

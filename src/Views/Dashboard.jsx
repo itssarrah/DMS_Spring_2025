@@ -1,38 +1,113 @@
-// Views/Dashboard.jsx
-import { useEffect } from "react";
-import { useSelector } from "react-redux";
-import { useNavigate, Link } from "react-router-dom";
+import React, { useState, useEffect } from "react";
+import { Link } from "react-router-dom";
+import axios from "axios";
 
-export default function Dashboard() {
-  const navigate = useNavigate();
-  const { user, isAuthenticated } = useSelector((state) => state.auth);
-  const { documents } = useSelector((state) => state.documents);
+const Dashboard = () => {
+  const [user, setUser] = useState(null);
+  const [documentStats, setDocumentStats] = useState({
+    total: 0,
+    drafts: 0,
+    published: 0,
+    approved: 0,
+  });
+  const [recentDocuments, setRecentDocuments] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  // Get authenticated user info from localStorage
+  const getTokenAndUser = () => {
+    try {
+      const serializedUser = localStorage.getItem("user");
+      
+      if (serializedUser === null) {
+        return { token: null, userId: null, roles: [] };
+      }
+      const user = JSON.parse(serializedUser);
+      return { token: user.token, userId: user.id, roles: user.roles || [] };
+    } catch (error) {
+      console.error("Could not load token from storage:", error);
+      return { token: null, userId: null, roles: [] };
+    }
+  };
 
   useEffect(() => {
-    // Redirect to login if not authenticated
-    if (!isAuthenticated) {
-      navigate("/login");
-    }
-  }, [isAuthenticated, navigate]);
+    const fetchUserData = async () => {
+      try {
+        const { token, userId } = getTokenAndUser();
+        if (!token) {
+          throw new Error("No authentication token found");
+        }
 
-  // Get recent documents (last 3)
-  const recentDocuments = [...documents]
-    .sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt))
-    .slice(0, 3);
+        const userResponse = await axios.get(`http://localhost:8080/api/users/${userId}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
 
-  // Count documents by status
-  const documentStats = documents.reduce(
-    (stats, doc) => {
-      stats.total++;
-      if (doc.status === "draft") stats.drafts++;
-      if (doc.status === "published") stats.published++;
-      if (doc.status === "approved") stats.approved++;
-      return stats;
-    },
-    { total: 0, drafts: 0, published: 0, approved: 0 }
-  );
+        setUser(userResponse.data);
 
-  if (!isAuthenticated) return null;
+        // Get department IDs from user
+        const userDepartmentIds = userResponse.data.departments.map(dep => dep.id);
+        // Fetch all documents
+        const documentsResponse = await axios.get("http://localhost:8083/api/documents", {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        // Filter documents where document.department.id is in user's departments
+        const userDocuments = documentsResponse.data.filter(doc =>
+          doc.departmentId && userDepartmentIds.includes(doc.departmentId)
+        );
+
+        
+        // Calculate document statistics
+        const stats = {
+          total: userDocuments.length,
+          drafts: userDocuments.filter(doc => doc.status === "draft").length,
+          published: userDocuments.filter(doc => doc.status === "published").length,
+          approved: userDocuments.filter(doc => doc.status === "approved").length,
+        };
+        
+        setDocumentStats(stats);
+        
+        // Sort documents by updated date and take the most recent 5
+        const sorted = [...userDocuments].sort((a, b) => 
+          new Date(b.updatedAt) - new Date(a.updatedAt)
+        ).slice(0, 5);
+        
+        setRecentDocuments(sorted);
+        setLoading(false);
+      } catch (err) {
+        console.error("Error fetching dashboard data:", err);
+        setError(err.message);
+        setLoading(false);
+      }
+    };
+
+    fetchUserData();
+  }, []);
+
+  if (loading) {
+    return (
+      <div className="p-6 bg-gray-50 min-h-screen">
+        <div className="max-w-6xl mx-auto text-center py-12">
+          <p className="text-lg text-gray-600">Loading dashboard...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="p-6 bg-gray-50 min-h-screen">
+        <div className="max-w-6xl mx-auto text-center py-12">
+          <p className="text-lg text-red-600">Error: {error}</p>
+          <button 
+            onClick={() => window.location.reload()} 
+            className="mt-4 px-4 py-2 bg-primary text-white rounded-lg"
+          >
+            Try Again
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="p-6 bg-gray-50 min-h-screen">
@@ -110,8 +185,8 @@ export default function Dashboard() {
                             : "bg-yellow-100 text-yellow-800"
                         }`}
                       >
-                        {doc.status.charAt(0).toUpperCase() +
-                          doc.status.slice(1)}
+                        {doc.status ? doc.status.charAt(0).toUpperCase() +
+                          doc.status.slice(1) : "Draft"}
                       </span>
                     </div>
                     <p className="text-sm text-gray-500 mt-1">
@@ -154,13 +229,15 @@ export default function Dashboard() {
               <span className="text-lg mr-2">📄</span>
               <span>All Documents</span>
             </Link>
-            <Link
-              to="/users"
-              className="flex items-center p-3 border rounded-lg hover:bg-gray-50"
-            >
-              <span className="text-lg mr-2">👥</span>
-              <span>User Management</span>
-            </Link>
+            {user && (user.role === "admin" || user.role === "manager") && (
+              <Link
+                to="/users"
+                className="flex items-center p-3 border rounded-lg hover:bg-gray-50"
+              >
+                <span className="text-lg mr-2">👥</span>
+                <span>User Management</span>
+              </Link>
+            )}
             <Link
               to="/profile"
               className="flex items-center p-3 border rounded-lg hover:bg-gray-50"
@@ -173,4 +250,6 @@ export default function Dashboard() {
       </div>
     </div>
   );
-}
+};
+
+export default Dashboard;

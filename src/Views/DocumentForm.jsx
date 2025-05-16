@@ -1,20 +1,49 @@
-// Views/DocumentForm.jsx
 import { useState, useEffect } from "react";
 import { useSelector, useDispatch } from "react-redux";
 import { useNavigate, useParams } from "react-router-dom";
 import {
-  addDocument,
-  updateDocument,
-  setCurrentDocument,
+  fetchUserDepartments,
+  selectUserDepartments,
+  selectDepartmentsLoading,
+  fetchDepartments,
+  selectAllDepartments,
+} from "../store/departmentSlice";
+
+import {
+  fetchCategories,
+  selectAllCategories,
+  selectCategoriesLoading,
+} from "../store/categorySlice";
+
+import {
+  fetchDocumentById,
+  createDocument,
+  updateDocumentAsync,
+  selectCurrentDocument,
+  selectDocumentsLoading,
   clearCurrentDocument,
 } from "../store/documentSlice";
+
+import axios from "axios";
 
 export default function DocumentForm() {
   const dispatch = useDispatch();
   const navigate = useNavigate();
   const { id } = useParams();
+  
+  // Get departments and categories from Redux store
+  const departments = useSelector(selectAllDepartments);
+
+  // State variables update
   const { user, isAuthenticated } = useSelector((state) => state.auth);
-  const { currentDocument, loading } = useSelector((state) => state.documents);
+  const currentDocument = useSelector(selectCurrentDocument);
+  const loading = useSelector(selectDocumentsLoading);
+
+  // Get user's departments from Redux store - changed from departments to userDepartments
+  const userDepartments = useSelector(selectUserDepartments);
+  const departmentsLoading = useSelector(selectDepartmentsLoading);
+  const categories = useSelector(selectAllCategories);
+  const categoriesLoading = useSelector(selectCategoriesLoading);
 
   // Form state
   const [formData, setFormData] = useState({
@@ -23,7 +52,14 @@ export default function DocumentForm() {
     status: "draft",
     tags: [],
     content: "",
+    departmentId: "",
+    categoryId: "",
   });
+
+  // File state
+  const [selectedFile, setSelectedFile] = useState(null);
+  const [fileUploading, setFileUploading] = useState(false);
+  const [fileError, setFileError] = useState("");
 
   // Tag input state
   const [tagInput, setTagInput] = useState("");
@@ -31,6 +67,7 @@ export default function DocumentForm() {
   // Determine if we're editing or creating
   const isEditMode = Boolean(id);
 
+  // Update useEffect to fetch user departments instead of all departments
   useEffect(() => {
     // Redirect to login if not authenticated
     if (!isAuthenticated) {
@@ -39,10 +76,14 @@ export default function DocumentForm() {
 
     // Load document data if in edit mode
     if (isEditMode) {
-      dispatch(setCurrentDocument(Number(id)));
+      dispatch(fetchDocumentById(Number(id)));
     } else {
       dispatch(clearCurrentDocument());
     }
+
+    // Fetch user's departments instead of all departments
+    dispatch(fetchUserDepartments());
+    dispatch(fetchCategories());
 
     // Cleanup
     return () => {
@@ -59,6 +100,8 @@ export default function DocumentForm() {
         status: currentDocument.status || "draft",
         tags: currentDocument.tags || [],
         content: currentDocument.content || "",
+        departmentId: currentDocument.departmentId || "",
+        categoryId: currentDocument.categoryId || "",
       });
     }
   }, [currentDocument, isEditMode]);
@@ -67,6 +110,31 @@ export default function DocumentForm() {
   const handleChange = (e) => {
     const { name, value } = e.target;
     setFormData({ ...formData, [name]: value });
+  };
+
+  // Handle file selection
+  const handleFileChange = (e) => {
+    const file = e.target.files[0];
+    
+    if (file) {
+      // Validate file size (10MB limit)
+      if (file.size > 10 * 1024 * 1024) {
+        setFileError("File size exceeds 10MB limit");
+        setSelectedFile(null);
+        return;
+      }
+      
+      // Validate file type
+      const allowedTypes = ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'];
+      if (!allowedTypes.includes(file.type)) {
+        setFileError("Only PDF and Word documents are allowed");
+        setSelectedFile(null);
+        return;
+      }
+      
+      setSelectedFile(file);
+      setFileError("");
+    }
   };
 
   // Handle tag input
@@ -102,26 +170,81 @@ export default function DocumentForm() {
   };
 
   // Handle form submission
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
 
-    if (isEditMode) {
-      dispatch(
-        updateDocument({
-          id: currentDocument.id,
-          ...formData,
-        })
-      );
-    } else {
-      dispatch(
-        addDocument({
-          ...formData,
-          createdBy: user.id,
-        })
-      );
+    // Check if user has permission to create in this department
+    const selectedDepartmentId = Number(formData.departmentId);
+    const userHasAccess = userDepartments.some(dept => dept.id === selectedDepartmentId);
+
+    if (!userHasAccess && !isEditMode) {
+      setFileError('You do not have permission to create documents in this department');
+      return;
     }
 
-    navigate("/documents");
+    let fileData = {};
+
+    // Upload file if selected
+    if (selectedFile) {
+      try {
+        setFileUploading(true);
+
+        // Create FormData for file upload
+        const fileFormData = new FormData();
+        fileFormData.append('file', selectedFile);
+
+        // Upload to storage service
+        const uploadResponse = await axios.post(
+          'http://localhost:8000/api/storage/upload',
+          fileFormData,
+          {
+            headers: {
+              'Authorization': `Bearer ${localStorage.getItem('token')}`,
+              'Content-Type': 'multipart/form-data'
+            }
+          }
+        );
+
+        setFileUploading(false);
+
+        // Get filename from response
+        fileData = {
+          fileName: uploadResponse.data.filename,
+          fileType: selectedFile.type,
+        };
+      } catch (error) {
+        setFileUploading(false);
+        setFileError('Error uploading file: ' + (error.response?.data?.message || error.message));
+        return;
+      }
+    }
+    
+    // Prepare final data for API
+    const documentData = {
+      ...formData,
+      ...fileData,
+      departmentId: Number(formData.departmentId),
+      categoryId: Number(formData.categoryId),
+      // Convert tags array to string if the API expects it that way
+      tags: formData.tags.join(',')
+    };
+    
+    try {
+      if (isEditMode) {
+        await dispatch(updateDocumentAsync({
+          id: currentDocument.id,
+          ...documentData
+        })).unwrap();
+      } else {
+        await dispatch(createDocument({
+          ...documentData,
+          createdBy: user.id,
+        })).unwrap();
+      }
+      navigate("/documents");
+    } catch (error) {
+      console.error("Failed to save document:", error);
+    }
   };
 
   if (!isAuthenticated) return null;
@@ -151,6 +274,74 @@ export default function DocumentForm() {
               />
             </div>
 
+            {/* Department Selection */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Department
+              </label>
+              <select
+                name="departmentId"
+                value={formData.departmentId}
+                onChange={handleChange}
+                required
+                disabled={departmentsLoading}
+                className="w-full p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
+              >
+                <option value="">Select Department</option>
+                {departmentsLoading ? (
+                  <option value="" disabled>Loading departments...</option>
+                ) : userDepartments.length > 0 ? (
+                  userDepartments.map((dept) => (
+                    <option key={dept.id} value={dept.id}>
+                      {dept.name}
+                    </option>
+                  ))
+                ) : (
+                  <option value="" disabled>No departments assigned to you</option>
+                )}
+              </select>
+              {departmentsLoading && (
+                <div className="mt-1 text-sm text-gray-500">
+                  Loading departments...
+                </div>
+              )}
+              {!departmentsLoading && userDepartments.length === 0 && (
+                <div className="mt-1 text-sm text-red-500">
+                  You don't have any assigned departments. Please contact an administrator.
+                </div>
+              )}
+            </div>
+
+            {/* Category Selection */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Category
+              </label>
+              <select
+                name="categoryId"
+                value={formData.categoryId}
+                onChange={handleChange}
+                disabled={categoriesLoading}
+                className="w-full p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
+              >
+                <option value="">Select Category</option>
+                {categoriesLoading ? (
+                  <option value="" disabled>Loading categories...</option>
+                ) : (
+                  categories.map((category) => (
+                    <option key={category.id} value={category.id}>
+                      {category.name}
+                    </option>
+                  ))
+                )}
+              </select>
+              {categoriesLoading && (
+                <div className="mt-1 text-sm text-gray-500">
+                  Loading categories...
+                </div>
+              )}
+            </div>
+
             {/* Description */}
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -164,6 +355,42 @@ export default function DocumentForm() {
                 placeholder="A brief description of this document"
                 rows="2"
               />
+            </div>
+
+            {/* File Upload */}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">
+                Document File
+              </label>
+              <div className="flex items-center space-x-2">
+                <input
+                  type="file"
+                  onChange={handleFileChange}
+                  className="p-2 border rounded w-full"
+                  accept=".pdf,.doc,.docx"
+                />
+              </div>
+              {selectedFile && (
+                <div className="mt-2 text-sm text-green-600">
+                  Selected file: {selectedFile.name}
+                </div>
+              )}
+              {fileError && (
+                <div className="mt-2 text-sm text-red-600">
+                  {fileError}
+                </div>
+              )}
+              {!isEditMode && !selectedFile && (
+                <div className="mt-2 text-sm text-gray-500">
+                  Upload a PDF or Word document (max 10MB)
+                </div>
+              )}
+              {isEditMode && currentDocument?.fileName && !selectedFile && (
+                <div className="mt-2 text-sm text-gray-600">
+                  Current file: {currentDocument.fileName}
+                  <span className="ml-2 text-blue-500">(Leave empty to keep current file)</span>
+                </div>
+              )}
             </div>
 
             {/* Status */}
@@ -231,15 +458,15 @@ export default function DocumentForm() {
             {/* Document Content */}
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-1">
-                Content
+                Additional Notes
               </label>
               <textarea
                 name="content"
                 value={formData.content}
                 onChange={handleChange}
                 className="w-full p-3 border rounded-lg focus:outline-none focus:ring-2 focus:ring-primary"
-                placeholder="Document content..."
-                rows="10"
+                placeholder="Additional notes or document content..."
+                rows="6"
               />
             </div>
 
@@ -255,9 +482,9 @@ export default function DocumentForm() {
               <button
                 type="submit"
                 className="px-4 py-2 bg-primary text-white rounded-lg hover:bg-secondary transition"
-                disabled={loading}
+                disabled={loading || fileUploading || departmentsLoading || categoriesLoading}
               >
-                {loading
+                {loading || fileUploading
                   ? "Saving..."
                   : isEditMode
                   ? "Update Document"

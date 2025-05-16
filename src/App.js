@@ -19,6 +19,7 @@ import DocumentManagement from "./Views/DocumentManagement";
 import DocumentForm from "./Views/DocumentForm";
 import DocumentView from "./Views/DocumentView";
 import Sidebar from "./Components/Sidebar.jsx";
+import AdminDashboard from "./Views/AdminDashboard.jsx"
 
 // Layout with Sidebar
 const SidebarLayout = () => {
@@ -63,6 +64,7 @@ const AppRoutes = () => {
         {/* Protected routes with sidebar */}
         <Route element={<SidebarLayout />}>
           <Route path="/dashboard" element={<Dashboard />} />
+          <Route path="/admindashboard" element={<AdminDashboard />} />
           <Route path="/users" element={<UserManagement />} />
           <Route path="/documents" element={<DocumentManagement />} />
           <Route path="/documents/new" element={<DocumentForm />} />

@@ -225,9 +225,10 @@ export const deleteDocumentAsync = createAsyncThunk(
   }
 );
 
+// Update the downloadDocument action to accept filename parameter
 export const downloadDocument = createAsyncThunk(
   "documents/downloadDocument",
-  async (id, { getState, rejectWithValue }) => {
+  async ({ id, fileName }, { getState, rejectWithValue }) => {
     try {
       const { token, roles } = getTokenAndUser();
       if (!token) {
@@ -251,7 +252,12 @@ export const downloadDocument = createAsyncThunk(
         }
       }
       
-      const response = await axios.get(`${API_URL}/${id}/download`, {
+      if (!fileName) {
+        return rejectWithValue("Filename not provided");
+      }
+      
+      // Use the fileName passed from the component
+      const response = await axios.get(`http://localhost:8000/download/${fileName}`, {
         headers: {
           Authorization: `Bearer ${token}`,
         },
@@ -263,22 +269,20 @@ export const downloadDocument = createAsyncThunk(
       const link = document.createElement("a");
       link.href = url;
       
-      // Get filename from response headers if available
-      const contentDisposition = response.headers["content-disposition"];
-      let filename = "document";
-      if (contentDisposition) {
-        const filenameMatch = contentDisposition.match(/filename="(.+)"/);
-        if (filenameMatch && filenameMatch.length === 2) filename = filenameMatch[1];
-      }
-      
-      link.setAttribute("download", filename);
+      // Use the provided filename
+      link.setAttribute("download", fileName);
       document.body.appendChild(link);
       link.click();
       link.remove();
       
-      return id;
+      // Return a serializable value, not the Blob
+      return { id, success: true };
     } catch (error) {
-      return rejectWithValue(error.response?.data || "Failed to download document");
+      // Return a serializable error message, not the Blob
+      return rejectWithValue(
+        error.response?.data?.message || 
+        "Failed to download document"
+      );
     }
   }
 );

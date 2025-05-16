@@ -76,13 +76,18 @@ export default function DocumentView() {
   };
 
   // Handle document download
+  // Updated handleDownload function for the component
   const handleDownload = async () => {
-    if (!currentDocument?.fileName) return;
+    if (!currentDocument?.id || !currentDocument?.fileName) return;
     
     setDownloadLoading(true);
     
     try {
-      await dispatch(downloadDocument(currentDocument.id)).unwrap();
+      // Pass both id and fileName to the action
+      await dispatch(downloadDocument({
+        id: currentDocument.id, 
+        fileName: currentDocument.fileName
+      })).unwrap();
       setDownloadLoading(false);
     } catch (error) {
       console.error("Error downloading document:", error);
@@ -90,7 +95,6 @@ export default function DocumentView() {
       setDownloadLoading(false);
     }
   };
-
   // Handle title translation
   const translateTitle = async () => {
     if (!currentDocument?.title) return;
